@@ -77,6 +77,8 @@ class Settings {
     String getOTAChannel() const { return otaChannel; }
     String getSavedScale() const { return savedScale; }
     bool isBoilerFillActive() const { return boilerFillActive; }
+    bool isMuseEnabled() const { return museEnabled; }
+    bool isMuseBubbles() const { return museBubbles; }
     int getStartupFillTime() const { return startupFillTime; }
     int getSteamFillTime() const { return steamFillTime; }
     bool isSmartGrindActive() const { return smartGrindActive; }
@@ -164,6 +166,8 @@ class Settings {
     void setOTAChannel(const String &otaChannel);
     void setSavedScale(const String &savedScale);
     void setBoilerFillActive(bool boiler_fill_active);
+    void setMuseEnabled(bool muse_enabled);
+    void setMuseBubbles(bool muse_bubbles);
     void setStartupFillTime(int startup_fill_time);
     void setSteamFillTime(int steam_fill_time);
     void setSmartGrindActive(bool smart_grind_active);
@@ -246,6 +250,8 @@ class Settings {
     bool homekit = false;
     bool volumetricTarget = false;
     bool boilerFillActive = false;
+    bool museEnabled = true; // Muse avatar overlay (Phase 1, proto3 port)
+    bool museBubbles = true; // Muse speech bubbles
     int startupFillTime = 0;
     int steamFillTime = 0;
     bool smartGrindActive = false;

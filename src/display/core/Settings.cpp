@@ -29,6 +29,8 @@ Settings::Settings() {
     savedScale = preferences.getString("ssc", "");
     momentaryButtons = preferences.getBool("mb", false);
     boilerFillActive = preferences.getBool("bf_a", false);
+    museEnabled = preferences.getBool("muse_en", true);
+    museBubbles = preferences.getBool("muse_bb", true);
     startupFillTime = preferences.getInt("bf_su", 5000);
     steamFillTime = preferences.getInt("bf_st", 5000);
     smartGrindActive = preferences.getBool("sg_a", false);
@@ -252,6 +254,16 @@ void Settings::setSavedScale(const String &savedScale) {
 
 void Settings::setBoilerFillActive(bool boiler_fill_active) {
     boilerFillActive = boiler_fill_active;
+    save();
+}
+
+void Settings::setMuseEnabled(bool muse_enabled) {
+    museEnabled = muse_enabled;
+    save();
+}
+
+void Settings::setMuseBubbles(bool muse_bubbles) {
+    museBubbles = muse_bubbles;
     save();
 }
 
@@ -535,6 +547,8 @@ void Settings::doSave() {
     preferences.putString("oc", otaChannel);
     preferences.putString("ssc", savedScale);
     preferences.putBool("bf_a", boilerFillActive);
+    preferences.putBool("muse_en", museEnabled);
+    preferences.putBool("muse_bb", museBubbles);
     preferences.putInt("bf_su", startupFillTime);
     preferences.putInt("bf_st", steamFillTime);
     preferences.putBool("sg_a", smartGrindActive);

@@ -17,6 +17,7 @@
 #include <display/plugins/AutoWakeupPlugin.h>
 #include <display/plugins/BoilerFillPlugin.h>
 #include <display/plugins/LedControlPlugin.h>
+#include <display/plugins/MuseAvatarPlugin.h>
 #include <display/plugins/ShotHistoryPlugin.h>
 #include <display/plugins/SmartGrindPlugin.h>
 #include <display/plugins/WebUIPlugin.h>
@@ -102,6 +103,7 @@ void Controller::setup() {
     pluginManager->registerPlugin(&BLEScales);
 #endif
     pluginManager->registerPlugin(new LedControlPlugin());
+    pluginManager->registerPlugin(new MuseAvatarPlugin());
     pluginManager->registerPlugin(new AutoWakeupPlugin());
     pluginManager->setup(this);
 
