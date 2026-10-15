@@ -20,11 +20,24 @@ vector<string> split(const string &s, char delim) {
     return result;
 }
 
+static bool is_numeric(const string &part) {
+    return !part.empty() && part.find_first_not_of("0123456789") == string::npos;
+}
+
 semver_t from_string(const string &version) {
     if (version.empty()) {
         return {0, 0, 0, nullptr, nullptr};
     }
     auto numbers = split(version, '.');
+    // Fork patch: a malformed version string (e.g. "muse-1.1" from a custom
+    // build tag) must never abort the caller — vector::at() below would throw
+    // std::out_of_range on a missing or non-numeric component. Degrade to the
+    // "no version" result above instead: such a device claims no version, so
+    // it is simply offered the latest release and can never outrank it.
+    if (numbers.size() < 3 || !is_numeric(numbers.at(0)) || !is_numeric(numbers.at(1)) ||
+        !is_numeric(numbers.at(2).substr(0, numbers.at(2).find('-')))) {
+        return {0, 0, 0, nullptr, nullptr};
+    }
     auto major = atoi(numbers.at(0).c_str());
     auto minor = atoi(numbers.at(1).c_str());
     int patch;
