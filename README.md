@@ -23,6 +23,26 @@ This project upgrades a Gaggia espresso machine with smart controls to improve y
 - **Safety Features**: Automatic shutoff if the system becomes unresponsive or overheats.
 - **User Interface**: Simple, intuitive display to control and monitor the machine.
 
+## Muse Avatar Companion (branch `feat/muse-avatar-phase1`)
+
+This branch adds **Muse**, a companion character that lives on the display and reacts to what the machine is doing. It is a display-only feature built as a plugin (`src/display/plugins/MuseAvatarPlugin`); the controller board, heating and pump logic, and the BLE protocol are completely untouched, and the plugin only ever reads machine state.
+
+What Muse does:
+
+- **Reacts to the machine state** with a different sprite pose for each state: sleeping on standby, excited while heating, waving when ready, focused while brewing, celebrating in the late phase of a shot and when it finishes, wiping sweat while steaming, and worried when a warning is active.
+- **Talks in speech bubbles** using a small local line table (no network needed). After a shot finishes, the bubble reports that shot's duration and yield.
+- **Stays out of the way**: on the brew screen Muse shrinks to the lower-left corner so the timer and weight readouts are never covered, and it hides on menu screens.
+- **Can be switched off**: the `muse_enabled` and `muse_bubbles` settings (stored in NVS, both on by default) control the avatar and its bubbles. With Muse disabled, the interface is identical to stock.
+
+Build and flash only the display firmware (LilyGo T-RGB board):
+
+```shell
+platformio run -e display
+platformio run -e display -t upload
+```
+
+Status: verified in the display simulator (builds for `display`, `display-headless`, and `display-sim` pass, native tests pass). On-device smoke testing is still pending.
+
 ## Screenshots and Images
 
 <img src="docs/assets/standby-screen.png" alt="Standby Screen" width="300px" />
