@@ -2,7 +2,6 @@
 
 #include <WiFi.h>
 #include <display/core/Controller.h>
-#include <display/core/LvglLock.h>
 #include <display/core/ProfileImage.h>
 #include <display/core/process/BrewProcess.h>
 #include <display/core/process/Process.h>
@@ -342,6 +341,12 @@ static bool pointerPressed() {
 }
 
 void DefaultUI::loop() {
+    // Per-pass hook for plugins that must run code on the UI task (e.g.
+    // MuseAvatarPlugin creates its LVGL overlay from here, never from its
+    // own task). Fired before rendering so work queued for this pass is
+    // serviced by its lv_task_handler().
+    pluginManager->trigger("ui:loop");
+
     const unsigned long now = ::millis();
     const unsigned long diff = now - lastRender;
 
@@ -409,13 +414,8 @@ void DefaultUI::loop() {
         }
     }
 
-    {
-        // Serialize all LVGL servicing with one-shot LVGL calls from other
-        // tasks (see LvglLock.h).
-        std::lock_guard<std::recursive_mutex> guard(lvglMutex());
-        ui_tick();
-        lv_task_handler();
-    }
+    ui_tick();
+    lv_task_handler();
 }
 
 void DefaultUI::loopProfiles() {
@@ -544,19 +544,16 @@ void DefaultUI::setupPanel() {
     applyGaugeSetpointStyle(gaugeSetpointsInside);
     setupState();
     applyTheme();
-    {
-        std::lock_guard<std::recursive_mutex> guard(lvglMutex());
-        ui_tick();
+    ui_tick();
 
-        lv_obj_t *standby = lv_scr_act();
-        lv_obj_t *black = lv_obj_create(nullptr);
-        lv_obj_set_style_bg_color(black, lv_color_black(), LV_PART_MAIN);
-        lv_obj_set_style_bg_opa(black, LV_OPA_COVER, LV_PART_MAIN);
-        lv_scr_load(black);
-        lv_scr_load_anim(standby, LV_SCR_LOAD_ANIM_FADE_ON, STARTUP_FADE_MS, 0, true);
+    lv_obj_t *standby = lv_scr_act();
+    lv_obj_t *black = lv_obj_create(nullptr);
+    lv_obj_set_style_bg_color(black, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(black, LV_OPA_COVER, LV_PART_MAIN);
+    lv_scr_load(black);
+    lv_scr_load_anim(standby, LV_SCR_LOAD_ANIM_FADE_ON, STARTUP_FADE_MS, 0, true);
 
-        lv_task_handler();
-    }
+    lv_task_handler();
 
     delay(100);
     // Set initial brightness based on settings

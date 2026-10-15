@@ -1,7 +1,6 @@
 #include "MuseAvatarPlugin.h"
 #include <cstring>
 #include <display/core/Controller.h>
-#include <display/core/LvglLock.h>
 #include <display/core/WarningManager.h>
 #include <display/core/constants.h>
 #include <display/core/process/BrewProcess.h>
@@ -90,6 +89,12 @@ int fitZoom(const lv_img_dsc_t *dsc, int boxW, int boxH) {
 void MuseAvatarPlugin::setup(Controller *controller, PluginManager *pluginManager) {
     this->controller = controller;
     pluginManager->on("controller:ready", [this](Event const) { initialized = true; });
+#ifndef GAGGIMATE_HEADLESS
+    // DefaultUI triggers "ui:loop" on the UI task every pass; the handler is
+    // where overlay creation happens, so no LVGL call ever leaves the UI
+    // task (see the class comment in the header).
+    pluginManager->on("ui:loop", [this](Event const &) { maybeCreateOverlay(); });
+#endif
 }
 
 void MuseAvatarPlugin::loop() {
@@ -99,15 +104,11 @@ void MuseAvatarPlugin::loop() {
 #ifndef GAGGIMATE_HEADLESS
     if (!overlayRequested) {
         overlayRequested = true;
-        // lv_async_call() is not thread-safe in LVGL 8.4: it allocates from
-        // the LVGL pool and creates a timer on the list the UI task walks in
-        // lv_task_handler(). Hold the shared LVGL mutex for the call (see
-        // LvglLock.h); the callback then runs on the UI task, inside
-        // lv_task_handler(), and creates the overlay objects there.
-        std::lock_guard<std::recursive_mutex> guard(lvglMutex());
-        if (lv_async_call(overlayInitAsyncCb, this) != LV_RES_OK) {
-            overlayRequested = false; // LVGL not up yet; retry next loop
-        }
+        // Post the creation request only — the overlay objects are created
+        // by the "ui:loop" handler on the UI task (maybeCreateOverlay), so
+        // this task never touches LVGL. LVGL is up by construction there:
+        // the event fires from inside DefaultUI::loop().
+        overlayCreateRequested.store(true);
     }
 #endif
     const unsigned long now = millis();
@@ -237,7 +238,15 @@ void MuseAvatarPlugin::updateState() {
 // Overlay view (UI task only)
 // ---------------------------------------------------------------------------
 
-void MuseAvatarPlugin::overlayInitAsyncCb(void *userData) { static_cast<MuseAvatarPlugin *>(userData)->createOverlay(); }
+void MuseAvatarPlugin::maybeCreateOverlay() {
+    // Runs on the UI task (the "ui:loop" PluginManager event is triggered
+    // from DefaultUI::loop()). Consumes the plugin task's creation request;
+    // a no-op on every pass until the request is posted, and createOverlay()
+    // itself stays a one-shot via overlayCreated.
+    if (overlayCreateRequested.exchange(false)) {
+        createOverlay();
+    }
+}
 
 void MuseAvatarPlugin::overlayTimerCb(lv_timer_t *timer) {
     auto *self = static_cast<MuseAvatarPlugin *>(timer->user_data);
