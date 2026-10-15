@@ -23,38 +23,56 @@ constexpr float READY_TEMP_TOLERANCE = 3.0f;
 // Layout (480x480 round panel): two variants. The standby screen keeps the
 // large avatar centred in the lower half — nothing sits behind it there but
 // the clock and the logo. Every content screen (brew/status/steam/water/
-// grind) uses the compact avatar tucked into the bottom-left corner
-// (muse-1.3): measured against the stock screens, the inner bottom-left is
-// empty on all of them, while the centre carries the profile name, the shot
-// timer/weight and the steam controls, and the bottom-right carries the
-// water-status icon. The bubble is a caption in the same bottom band: it
-// starts right of the sprite and its bottom edge sits below every content
-// screen's action row, growing upward — it never crosses the centre stack
-// (an earlier draft anchored it above the sprite, where it landed on the
-// profile name / shot timer; the band below the action row is the only
-// strip that is empty on brew, status and steam alike). On standby the
-// bubble is always a warning notice and parks in the empty band between
-// the clock and the logo instead.
+// grind) uses the compact avatar in the bottom-left region (muse-1.3):
+// measured against the stock screens, the inner bottom-left is empty on all
+// of them, while the centre carries the profile name, the shot timer/weight
+// and the steam controls, and the bottom-right carries the water-status
+// icon. The bubble is a caption in the same bottom band: it starts right of
+// the sprite and its bottom edge sits below every content screen's action
+// row, growing upward — it never crosses the centre stack (an earlier draft
+// anchored it above the sprite, where it landed on the profile name / shot
+// timer; the band below the action row is the only strip that is empty on
+// brew, status and steam alike). On standby the bubble is always a warning
+// notice and parks in the empty band between the clock and the logo
+// instead.
+// Disc fit (muse-1.3.1): the panel is a disc, centre (240,240), radius
+// 240 — a square-screen corner placement clips. The muse-1.3 compact box
+// (x 74..182, y 314..422) put its bottom-left corner at radius 246, outside
+// the disc, and the character's lower-left was cut off by the round edge.
+// The compact box is now derived from the disc: every corner of the sprite
+// box — and of the bubble — must sit within an effective radius of 230.
+// Box 96x96 at x 102..198, y 322..418: worst corner (102,418) at 225.2.
+// Bubble x 202..378 (4 px right of the box), bottom edge y=420: worst
+// corner (378,420) at 226.8. At 108 px wide the box's right edge (208+)
+// would have pushed the bubble's bottom-right corner past 230, so the
+// compact sprite shrank to 96 rather than moving back out or into the
+// centre content. The top edge (322) also gains clearance over muse-1.3:
+// the stock icon row ends ~19 px above the old 314 edge.
 // The sprite is fitted into a box (per layout) with lv_img zoom; all poses
 // share one scale in the source assets, so the character size is
 // consistent across states.
+// Layering: the overlay lives on lv_layer_top() (createOverlay), above
+// every screen; renderOverlay() re-asserts the foreground order each pass
+// so nothing created later on that layer can ever draw over the avatar.
 namespace {
 // Large layout (standby) fit box / root placement (align-center offsets).
 constexpr int BOX_W = 168;
 constexpr int BOX_H = 158;
 constexpr int ROOT_Y = 128;
-// Compact layout (content screens): bottom-left corner, clear of the
-// icon row above it (stock icons end ~19 px above the box) and of the
-// bottom-centre chevron.
-constexpr int BOX_W_C = 108;
-constexpr int BOX_H_C = 108;
-constexpr int ROOT_X_C = -112;
-constexpr int ROOT_Y_C = 128;
+// Compact layout (content screens): bottom-left region, inset to fit the
+// round panel's disc (see the disc-fit note above). Root offsets are
+// align-center deltas: box centre (150,370) for a 96x96 box.
+constexpr int BOX_W_C = 96;
+constexpr int BOX_H_C = 96;
+constexpr int ROOT_X_C = -90;
+constexpr int ROOT_Y_C = 130;
 // Speech bubble: narrow, small font, thin padding, translucent — it is a
 // caption for the avatar, not a banner (muse-1.3; the old 250 px opaque
-// pill covered the profile name and the shot readouts).
+// pill covered the profile name and the shot readouts). The compact width
+// keeps the bubble's corners inside the disc at its bottom-band position
+// (muse-1.3.1).
 constexpr int BUBBLE_W = 208;   // large layout
-constexpr int BUBBLE_W_C = 184; // compact layout
+constexpr int BUBBLE_W_C = 176; // compact layout
 constexpr int BUBBLE_PAD = 4;
 
 void setHidden(lv_obj_t *obj, bool hidden) {
