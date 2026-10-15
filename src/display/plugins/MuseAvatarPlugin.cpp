@@ -18,23 +18,36 @@ constexpr float READY_TEMP_TOLERANCE = 3.0f;
 #include <display/ui/default/eez/eez-flow.h>
 #include <display/ui/default/eez/screens.h>
 
-// Layout (480x480 round panel): the avatar sits in the lower-center area,
-// inside the inscribed safe circle, and leaves the gauge dials and the
-// temperature/pressure readouts at the top untouched. The sprite is fitted
-// into a box (per layout) with lv_img zoom; all poses share one scale in the
-// source assets, so the character size is consistent across states.
+// Layout (480x480 round panel): two variants. The standby screen keeps the
+// large avatar centred in the lower half — nothing sits behind it there but
+// the clock and the logo. Every content screen (brew/status/steam/water/
+// grind) uses the compact avatar tucked into the bottom-left corner
+// (muse-1.3): measured against the stock screens, the inner bottom-left is
+// empty on all of them, while the centre carries the profile name, the shot
+// timer/weight and the steam controls, and the bottom-right carries the
+// water-status icon. The bubble hugs the top of the sprite and grows
+// upward from it, toward the nearest edge — never across the centre.
+// The sprite is fitted into a box (per layout) with lv_img zoom; all poses
+// share one scale in the source assets, so the character size is
+// consistent across states.
 namespace {
-// Large layout fit box / root placement (align-center offsets). Sized to
-// match the Phase 1 placeholder footprint (132px circle at y+128), so the
-// sprite clears the profile name on the brew screen and the steam bar.
+// Large layout (standby) fit box / root placement (align-center offsets).
 constexpr int BOX_W = 168;
 constexpr int BOX_H = 158;
 constexpr int ROOT_Y = 128;
-// Compact layout (status screen): smaller, lower-left, clear of readouts.
+// Compact layout (content screens): bottom-left corner, clear of the
+// icon row above it (stock icons end ~19 px above the box) and of the
+// bottom-centre chevron.
 constexpr int BOX_W_C = 108;
 constexpr int BOX_H_C = 108;
-constexpr int ROOT_X_C = -108;
-constexpr int ROOT_Y_C = 124;
+constexpr int ROOT_X_C = -112;
+constexpr int ROOT_Y_C = 128;
+// Speech bubble: narrow, small font, thin padding, translucent — it is a
+// caption for the avatar, not a banner (muse-1.3; the old 250 px opaque
+// pill covered the profile name and the shot readouts).
+constexpr int BUBBLE_W = 208;   // large layout
+constexpr int BUBBLE_W_C = 184; // compact layout
+constexpr int BUBBLE_PAD = 4;
 
 void setHidden(lv_obj_t *obj, bool hidden) {
     if (hidden)
@@ -298,19 +311,19 @@ void MuseAvatarPlugin::createOverlay() {
     lv_obj_clear_flag(img, LV_OBJ_FLAG_CLICKABLE);
 
     bubble = lv_obj_create(lv_layer_top());
-    lv_obj_set_width(bubble, 250);
+    lv_obj_set_width(bubble, BUBBLE_W);
     lv_obj_set_height(bubble, LV_SIZE_CONTENT);
     lv_obj_align(bubble, LV_ALIGN_CENTER, 0, 32);
     lv_obj_set_style_bg_color(bubble, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(bubble, LV_OPA_90, LV_PART_MAIN);
-    lv_obj_set_style_radius(bubble, 12, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(bubble, LV_OPA_80, LV_PART_MAIN);
+    lv_obj_set_style_radius(bubble, 10, LV_PART_MAIN);
     lv_obj_set_style_border_width(bubble, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(bubble, 6, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(bubble, BUBBLE_PAD, LV_PART_MAIN);
     lv_obj_clear_flag(bubble, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
 
-    bubbleLabel = makeLabel(bubble, &lv_font_montserrat_14, lv_color_hex(0x26221F));
+    bubbleLabel = makeLabel(bubble, &lv_font_montserrat_12, lv_color_hex(0x26221F));
     lv_label_set_text(bubbleLabel, "");
-    lv_obj_set_width(bubbleLabel, 238);
+    lv_obj_set_width(bubbleLabel, BUBBLE_W - 2 * BUBBLE_PAD);
     lv_label_set_long_mode(bubbleLabel, LV_LABEL_LONG_DOT);
     lv_obj_align(bubbleLabel, LV_ALIGN_CENTER, 0, 0);
 
@@ -337,30 +350,33 @@ void MuseAvatarPlugin::renderOverlay(uint32_t tick) {
         return;
     }
 
-    // The status screen carries the live shot timer/weight in the center, so
-    // there the avatar shrinks into the empty lower-left area (§2.2: never
-    // cover a readout). Everywhere else it uses the large layout. Both use
-    // the same sprite asset — the compact layout is just a smaller zoom.
-    const bool compact = screen == SCREEN_ID_STATUS_SCREEN;
+    // Only the standby screen uses the large layout; every content screen
+    // uses the compact corner layout (muse-1.3, see the layout note at the
+    // top of this file). Both use the same sprite asset — the compact
+    // layout is just a smaller zoom.
+    const bool compact = screen != SCREEN_ID_STANDBY_SCREEN;
     const int boxW = compact ? BOX_W_C : BOX_W;
     const int boxH = compact ? BOX_H_C : BOX_H;
     if (compact != compactLayout || !layoutApplied) {
         compactLayout = compact;
         layoutApplied = true;
         lv_obj_set_size(root, boxW, boxH);
-        lv_obj_set_width(bubble, compact ? 216 : 250);
-        lv_obj_set_width(bubbleLabel, compact ? 204 : 238);
+        lv_obj_set_width(bubble, compact ? BUBBLE_W_C : BUBBLE_W);
+        lv_obj_set_width(bubbleLabel, (compact ? BUBBLE_W_C : BUBBLE_W) - 2 * BUBBLE_PAD);
         renderedPose = nullptr; // force pose re-apply at the new zoom
     }
     const int rootX = compact ? ROOT_X_C : 0;
     const int rootY = compact ? ROOT_Y_C : ROOT_Y;
     lv_obj_align(root, LV_ALIGN_CENTER, rootX, rootY);
-    // Bubble vertical position matches the Phase 1 geometry (centre offset
-    // +32 on the large layout), so it clears the profile name on the brew
-    // screen and the temperature readout on the steam screen exactly as
-    // before; the compact layout keeps its own proven offset.
-    const int bubbleY = compact ? ROOT_Y_C - BOX_H_C / 2 - 34 : 32;
-    lv_obj_align(bubble, LV_ALIGN_CENTER, rootX, bubbleY);
+    // The bubble is anchored to the sprite: horizontally centred on it,
+    // its bottom edge 6 px above the sprite box, growing upward as its
+    // content height changes — on the compact layout that keeps it in the
+    // empty band between the stock icon row and the sprite, on standby in
+    // the gap under the logo. It never wanders across the screen centre.
+    lv_obj_update_layout(bubble);
+    const int bubbleH = lv_obj_get_height(bubble);
+    const int rootTop = 240 + rootY - boxH / 2;
+    lv_obj_align(bubble, LV_ALIGN_CENTER, rootX, rootTop - 6 - bubbleH / 2 - 240);
 
     // --- sprite pose + transform animation (tick-driven, ~8.3 fps) ---
     const lv_img_dsc_t *pose = poseForState(state);
