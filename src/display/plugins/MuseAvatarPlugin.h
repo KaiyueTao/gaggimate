@@ -15,10 +15,15 @@
 // on an LVGL top-layer overlay, with speech bubbles from a local line table.
 //
 // Threading: loop() runs on the plugin task and only *computes* machine state
-// into the atomics below (same read pattern as LedControlPlugin). All LVGL
-// objects are created via lv_async_call and afterwards only touched from the
-// LVGL timer callback, i.e. inside lv_task_handler() on the UI task. The
-// plugin is read-only: it never sends commands to the controller.
+// into the atomics below (same read pattern as LedControlPlugin). The overlay
+// objects themselves are created by a callback that LVGL runs inside
+// lv_task_handler() on the UI task, and afterwards are only touched from the
+// LVGL timer callback, i.e. on the UI task as well. LVGL 8.4 takes no locks
+// internally, so even queueing that callback (lv_async_call) allocates and
+// creates a timer on LVGL's unlocked timer list: loop() therefore holds
+// lvglMutex() (see LvglLock.h) for the call, the same mutex the UI task holds
+// while servicing LVGL. The plugin is read-only: it never sends commands to
+// the controller.
 class MuseAvatarPlugin : public Plugin {
   public:
     void setup(Controller *controller, PluginManager *pluginManager) override;
@@ -46,17 +51,28 @@ class MuseAvatarPlugin : public Plugin {
     unsigned long lastLineChange = 0;
     std::atomic<uint32_t> lineRotation{0};
 
-    // Last-process bookkeeping for the DONE celebration window.
-    void *seenDoneProcess = nullptr;
+    // Last-process bookkeeping for the DONE celebration window. The finished
+    // shot is identified by value — its start/finish timestamps — never by
+    // process pointer: the object is deleted by other tasks once the shot is
+    // over, and a later BrewProcess can reuse the same heap address, which a
+    // pointer comparison would mistake for "already shown" (GM-147 class of
+    // bug). Only primitive values are ever copied out of the process lock.
+    unsigned long doneShownStarted = 0;
+    unsigned long doneShownFinished = 0;
     unsigned long doneAt = 0;
     int doneShotSeconds = 0;
-    int doneShotVolumeMl = 0;
+    int doneShotVolume = 0;
+    // VolumetricMeasurementSource (as uint8_t; 0 = INACTIVE) that produced
+    // doneShotVolume, captured under the process lock together with it. The
+    // DONE bubble renders "g" for scale sources and "ml" for flow estimation.
+    uint8_t doneShotVolumeSource = 0;
 
     // Snapshot shared with the LVGL timer callback.
     std::atomic<uint8_t> snapState{static_cast<uint8_t>(MuseAvatarState::HIDDEN)};
     std::atomic<bool> snapBubbles{true};
     std::atomic<int> snapShotSeconds{0};
-    std::atomic<int> snapShotVolumeMl{0};
+    std::atomic<int> snapShotVolume{0};
+    std::atomic<uint8_t> snapShotVolumeSource{0}; // VolumetricMeasurementSource; 0 = INACTIVE
     std::mutex warningMutex;
     char warningText[48] = "";
 

@@ -1,6 +1,7 @@
 #include "MuseAvatarPlugin.h"
 #include <cstring>
 #include <display/core/Controller.h>
+#include <display/core/LvglLock.h>
 #include <display/core/WarningManager.h>
 #include <display/core/constants.h>
 #include <display/core/process/BrewProcess.h>
@@ -98,6 +99,12 @@ void MuseAvatarPlugin::loop() {
 #ifndef GAGGIMATE_HEADLESS
     if (!overlayRequested) {
         overlayRequested = true;
+        // lv_async_call() is not thread-safe in LVGL 8.4: it allocates from
+        // the LVGL pool and creates a timer on the list the UI task walks in
+        // lv_task_handler(). Hold the shared LVGL mutex for the call (see
+        // LvglLock.h); the callback then runs on the UI task, inside
+        // lv_task_handler(), and creates the overlay objects there.
+        std::lock_guard<std::recursive_mutex> guard(lvglMutex());
         if (lv_async_call(overlayInitAsyncCb, this) != LV_RES_OK) {
             overlayRequested = false; // LVGL not up yet; retry next loop
         }
@@ -141,21 +148,44 @@ MuseAvatarState MuseAvatarPlugin::computeState() {
     bool brewRunning = false;
     unsigned long brewElapsedMs = 0;
     {
-        // Deref under the process lock — other tasks delete processes (GM-147).
+        // All Process derefs happen under the process lock — other tasks
+        // delete processes (GM-147). Only primitive values are copied out;
+        // no Process* is stored or used after the lock is released.
         std::lock_guard<std::recursive_mutex> guard(controller->getProcessLock());
         Process *current = controller->getProcess();
         if (current != nullptr && current->getType() == MODE_BREW && current->isActive()) {
             brewRunning = true;
             brewElapsedMs = millis() - static_cast<BrewProcess *>(current)->processStarted;
-        }
-        Process *last = controller->getLastProcess();
-        if (last != nullptr && last->getType() == MODE_BREW && last->isComplete() && last != seenDoneProcess) {
-            auto *brew = static_cast<BrewProcess *>(last);
-            if (brew->finished > brew->processStarted) {
-                seenDoneProcess = last;
-                doneAt = millis();
-                doneShotSeconds = static_cast<int>((brew->finished - brew->processStarted) / 1000);
-                doneShotVolumeMl = static_cast<int>(brew->currentVolume);
+            // A new shot is running: re-arm the DONE celebration so its
+            // completion always shows, whatever its timestamps turn out to be.
+            doneShownStarted = 0;
+            doneShownFinished = 0;
+        } else {
+            Process *last = controller->getLastProcess();
+            if (last != nullptr && last->getType() == MODE_BREW && last->isComplete()) {
+                auto *brew = static_cast<BrewProcess *>(last);
+                // Identify the finished shot by value (its start/finish
+                // timestamps), not by address: the object is deleted once
+                // the shot is cleared, and a later BrewProcess may reuse
+                // the same heap address — a pointer comparison would then
+                // mistake that new shot for the one already celebrated and
+                // swallow its DONE.
+                if (brew->finished > brew->processStarted &&
+                    (brew->processStarted != doneShownStarted || brew->finished != doneShownFinished)) {
+                    doneShownStarted = brew->processStarted;
+                    doneShownFinished = brew->finished;
+                    doneAt = millis();
+                    doneShotSeconds = static_cast<int>((brew->finished - brew->processStarted) / 1000);
+                    doneShotVolume = static_cast<int>(brew->currentVolume);
+                    // The source that fed this process is still the
+                    // controller's locked volumetric source at this moment:
+                    // it is only reset inside clearLocked(), together with
+                    // the deletion of lastProcess and under this same lock.
+                    // getEffectiveScaleSource() re-takes the (recursive)
+                    // process lock and returns exactly that source while a
+                    // last process exists.
+                    doneShotVolumeSource = static_cast<uint8_t>(controller->getEffectiveScaleSource());
+                }
             }
         }
     }
@@ -167,7 +197,8 @@ MuseAvatarState MuseAvatarPlugin::computeState() {
     }
     if (doneAt > 0 && millis() - doneAt < DONE_WINDOW_MS) {
         snapShotSeconds.store(doneShotSeconds);
-        snapShotVolumeMl.store(doneShotVolumeMl);
+        snapShotVolume.store(doneShotVolume);
+        snapShotVolumeSource.store(doneShotVolumeSource);
         return MuseAvatarState::DONE;
     }
     if (mode == MODE_STANDBY) {
@@ -352,9 +383,29 @@ void MuseAvatarPlugin::renderOverlay(uint32_t tick) {
             strncpy(text, warningText, sizeof(text) - 1);
         } else if (state == MuseAvatarState::DONE) {
             snprintf(text, sizeof(text), "Done! %ds shot", snapShotSeconds.load());
-            if (snapShotVolumeMl.load() > 0) {
+            const int volume = snapShotVolume.load();
+            if (volume > 0) {
+                // BrewProcess.currentVolume is a weight in grams when it was
+                // fed by a scale and a pumped-volume estimate in ml when it
+                // was fed by flow estimation — label it with the unit of the
+                // source captured alongside it, never a hardcoded one. An
+                // indeterminate source shows the bare number rather than a
+                // wrong unit.
+                const char *unit = "";
+                switch (static_cast<VolumetricMeasurementSource>(snapShotVolumeSource.load())) {
+                case VolumetricMeasurementSource::BLUETOOTH:
+                case VolumetricMeasurementSource::HARDWARE:
+                    unit = " g";
+                    break;
+                case VolumetricMeasurementSource::FLOW_ESTIMATION:
+                    unit = " ml";
+                    break;
+                default:
+                    unit = "";
+                    break;
+                }
                 char extra[24];
-                snprintf(extra, sizeof(extra), ", %d ml", snapShotVolumeMl.load());
+                snprintf(extra, sizeof(extra), ", %d%s", volume, unit);
                 strncat(text, extra, sizeof(text) - strlen(text) - 1);
             }
         } else if (state != MuseAvatarState::SLEEP) {
