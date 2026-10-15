@@ -17,6 +17,8 @@ constexpr float READY_TEMP_TOLERANCE = 3.0f;
 #include "MuseSprites.h"
 #include <display/ui/default/eez/eez-flow.h>
 #include <display/ui/default/eez/screens.h>
+#include <display/ui/default/eez/structs.h>
+#include <display/ui/default/eez/vars.h>
 
 // Layout (480x480 round panel): two variants. The standby screen keeps the
 // large avatar centred in the lower half — nothing sits behind it there but
@@ -25,8 +27,14 @@ constexpr float READY_TEMP_TOLERANCE = 3.0f;
 // (muse-1.3): measured against the stock screens, the inner bottom-left is
 // empty on all of them, while the centre carries the profile name, the shot
 // timer/weight and the steam controls, and the bottom-right carries the
-// water-status icon. The bubble hugs the top of the sprite and grows
-// upward from it, toward the nearest edge — never across the centre.
+// water-status icon. The bubble is a caption in the same bottom band: it
+// starts right of the sprite and its bottom edge sits below every content
+// screen's action row, growing upward — it never crosses the centre stack
+// (an earlier draft anchored it above the sprite, where it landed on the
+// profile name / shot timer; the band below the action row is the only
+// strip that is empty on brew, status and steam alike). On standby the
+// bubble is always a warning notice and parks in the empty band between
+// the clock and the logo instead.
 // The sprite is fitted into a box (per layout) with lv_img zoom; all poses
 // share one scale in the source assets, so the character size is
 // consistent across states.
@@ -343,7 +351,18 @@ void MuseAvatarPlugin::renderOverlay(uint32_t tick) {
     const bool onMainScreen = screen == SCREEN_ID_STANDBY_SCREEN || screen == SCREEN_ID_BREW_SCREEN ||
                               screen == SCREEN_ID_STATUS_SCREEN || screen == SCREEN_ID_STEAM_SCREEN ||
                               screen == SCREEN_ID_WATER_SCREEN || screen == SCREEN_ID_GRIND_SCREEN;
-    const bool visible = state != MuseAvatarState::HIDDEN && onMainScreen;
+    // The brew screen hosts the Adjust Profile editor (temperature /
+    // volumetric target) as a sub-view under the same EEZ screen id;
+    // DefaultUI flags it through the UI-flags flow variable. It is a
+    // profile screen for our purposes: hide there too (muse-1.3 matrix
+    // finding — the screen-id whitelist alone cannot see it).
+    bool adjustmentsOpen = false;
+    if (screen == SCREEN_ID_BREW_SCREEN) {
+        UIFlagsValue flags(eez::flow::getGlobalVariable(FLOW_GLOBAL_VARIABLE_UI_FLAGS));
+        if (flags)
+            adjustmentsOpen = flags.brew_adjustments();
+    }
+    const bool visible = state != MuseAvatarState::HIDDEN && onMainScreen && !adjustmentsOpen;
     setHidden(root, !visible);
     if (!visible) {
         lv_obj_add_flag(bubble, LV_OBJ_FLAG_HIDDEN);
@@ -368,15 +387,22 @@ void MuseAvatarPlugin::renderOverlay(uint32_t tick) {
     const int rootX = compact ? ROOT_X_C : 0;
     const int rootY = compact ? ROOT_Y_C : ROOT_Y;
     lv_obj_align(root, LV_ALIGN_CENTER, rootX, rootY);
-    // The bubble is anchored to the sprite: horizontally centred on it,
-    // its bottom edge 6 px above the sprite box, growing upward as its
-    // content height changes — on the compact layout that keeps it in the
-    // empty band between the stock icon row and the sprite, on standby in
-    // the gap under the logo. It never wanders across the screen centre.
+    // Bubble placement (muse-1.3, see the layout note at the top): on
+    // content screens it captions the sprite from the same bottom band —
+    // left edge 4 px right of the sprite box, bottom edge at y=420 (below
+    // the brew play row, the status pause button and the steam glyph,
+    // above the bottom-centre chevron), growing upward as its content
+    // height changes. On standby it parks in the empty band between the
+    // clock (ends ~y=105) and the logo (starts ~y=222).
     lv_obj_update_layout(bubble);
     const int bubbleH = lv_obj_get_height(bubble);
-    const int rootTop = 240 + rootY - boxH / 2;
-    lv_obj_align(bubble, LV_ALIGN_CENTER, rootX, rootTop - 6 - bubbleH / 2 - 240);
+    if (compact) {
+        const int bubbleW = lv_obj_get_width(bubble);
+        const int bubbleX = rootX + boxW / 2 + 4 + bubbleW / 2;
+        lv_obj_align(bubble, LV_ALIGN_CENTER, bubbleX, 420 - bubbleH / 2 - 240);
+    } else {
+        lv_obj_align(bubble, LV_ALIGN_CENTER, 0, -72);
+    }
 
     // --- sprite pose + transform animation (tick-driven, ~8.3 fps) ---
     const lv_img_dsc_t *pose = poseForState(state);
