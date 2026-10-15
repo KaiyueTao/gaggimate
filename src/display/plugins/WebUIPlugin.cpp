@@ -493,6 +493,10 @@ void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) const {
                 settings->setSavedScaleName(request->arg("savedScaleName"));
             if (request->hasArg("autowakeupEnabled"))
                 settings->setAutoWakeupEnabled(parseBoolArg(request->arg("autowakeupEnabled")));
+            if (request->hasArg("museEnabled"))
+                settings->setMuseEnabled(parseBoolArg(request->arg("museEnabled")));
+            if (request->hasArg("museBubbles"))
+                settings->setMuseBubbles(parseBoolArg(request->arg("museBubbles")));
             if (request->hasArg("autowakeupSchedules")) {
                 // Handle schedule format with days
                 String schedulesStr = request->arg("autowakeupSchedules");
@@ -616,6 +620,8 @@ void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) const {
     doc["steamPumpCutoff"] = settings.getSteamPumpCutoff();
     doc["themeMode"] = settings.getThemeMode();
     doc["statusDisplayMode"] = settings.getStatusDisplayMode();
+    doc["museEnabled"] = settings.isMuseEnabled();
+    doc["museBubbles"] = settings.isMuseBubbles();
     doc["sunriseIdle"] = settings.getSunriseIdle();
     doc["sunriseActive"] = settings.getSunriseActive();
     doc["sunriseFinished"] = settings.getSunriseFinished();

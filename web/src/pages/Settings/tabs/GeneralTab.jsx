@@ -419,6 +419,25 @@ export function GeneralTab({
             </InputGroupField>
           </div>
         </div>
+
+        {/* Muse companion */}
+        <div className='border-base-content/5 mt-6 border-t pt-6'>
+          <div className='mb-4'>
+            <ToggleField
+              label={t`Muse Avatar`}
+              htmlFor='museEnabled'
+              helpText={t`Show the Muse companion on the machine display`}
+              checked={!!formData.museEnabled}
+              onChange={onChange('museEnabled')}
+            />
+          </div>
+          <ToggleField
+            label={t`Muse Speech Bubbles`}
+            htmlFor='museBubbles'
+            checked={!!formData.museBubbles}
+            onChange={onChange('museBubbles')}
+          />
+        </div>
       </Section>
 
       {/* Web Settings — in the app these live in App Settings and the dashboard customizer */}

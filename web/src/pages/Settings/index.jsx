@@ -71,6 +71,8 @@ const CHECKBOX_KEYS = [
   'clock24hFormat',
   'autowakeupEnabled',
   'smartGrindToggle',
+  'museEnabled',
+  'museBubbles',
 ];
 
 // Device facts GET /api/settings reports for display only; never saved, exported or imported.
