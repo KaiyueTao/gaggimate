@@ -387,6 +387,22 @@ void MuseAvatarPlugin::renderOverlay(uint32_t tick) {
         return;
     }
 
+    // The overlay sits on lv_layer_top(), above every screen — but within
+    // a layer, draw order follows creation order, so anything created on
+    // the top layer after the overlay would paint over the avatar.
+    // Re-assert the order (sprite container, then bubble on top of it)
+    // whenever it has drifted; today the plugin is the layer's only user,
+    // so this is a cheap no-op guard for future stock/plugin users.
+    {
+        lv_obj_t *topLayer = lv_layer_top();
+        const uint32_t siblings = lv_obj_get_child_cnt(topLayer);
+        if (siblings >= 2 && (lv_obj_get_index(root) != static_cast<int>(siblings) - 2 ||
+                              lv_obj_get_index(bubble) != static_cast<int>(siblings) - 1)) {
+            lv_obj_move_foreground(root);
+            lv_obj_move_foreground(bubble);
+        }
+    }
+
     // Only the standby screen uses the large layout; every content screen
     // uses the compact corner layout (muse-1.3, see the layout note at the
     // top of this file). Both use the same sprite asset — the compact
