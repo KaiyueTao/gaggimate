@@ -1,6 +1,7 @@
 #ifndef BLESCALEPLUGIN_H
 #define BLESCALEPLUGIN_H
 #include "../core/Plugin.h"
+#include <memory>
 #include "remote_scales.h"
 #include "remote_scales_plugin_registry.h"
 
