@@ -1,4 +1,5 @@
 #include "MuseAvatarPlugin.h"
+#include "MuseSpriteFit.h"
 #include "MuseWarningPolicy.h"
 #include <cstring>
 #include <display/core/Controller.h>
@@ -50,7 +51,12 @@ constexpr float READY_TEMP_TOLERANCE = 3.0f;
 // the stock icon row ends ~19 px above the old 314 edge.
 // The sprite is fitted into a box (per layout) with lv_img zoom; all poses
 // share one scale in the source assets, so the character size is
-// consistent across states.
+// consistent across states. Fitting alone is not enough: the img must be
+// anchored by its pivot, never aligned by its object rect — in LVGL 8.4
+// VIRTUAL size mode that rect is the *untransformed* source size, so
+// aligning it placed the zoomed artwork's head outside the root's clip
+// (the muse-1.3/1.3.1 head-crop; see MuseSpriteFit.h for the full story
+// and the fit/anchor math, pinned by test_muse_sprite_fit).
 // Layering: the overlay lives on lv_layer_top() (createOverlay), above
 // every screen; renderOverlay() re-asserts the foreground order each pass
 // so nothing created later on that layer can ever draw over the avatar.
@@ -116,12 +122,34 @@ const lv_img_dsc_t *poseForState(MuseAvatarState state) {
     }
 }
 
-// Zoom (256 = 100%) that fits the whole sprite inside the box.
-int fitZoom(const lv_img_dsc_t *dsc, int boxW, int boxH) {
-    const int zx = 256 * boxW / dsc->header.w;
-    const int zy = 256 * boxH / dsc->header.h;
-    const int z = zx < zy ? zx : zy;
-    return z > 0 ? z : 1;
+// Per-state animation envelope: the worst phase the sprite fit must
+// survive (see MuseSpriteFit.h). angleMax is the max |angle| of the
+// phase switch in renderOverlay (0.1-degree units), up the max upward
+// travel (-dy), side the max |dx|, breath the zoom added back at some
+// phases (SLEEP breathing). Keep in step with that switch — the native
+// suite pins the containment these numbers promise.
+MuseSpriteFit::Envelope animEnvelope(MuseAvatarState state) {
+    using MuseSpriteFit::Envelope;
+    switch (state) {
+    case MuseAvatarState::SLEEP:
+        return Envelope{0, 0, 0, 4}; // breathing zoom +4
+    case MuseAvatarState::HEATING:
+        return Envelope{12, 2, 0, 0};
+    case MuseAvatarState::READY:
+        return Envelope{14, 2, 0, 0};
+    case MuseAvatarState::BREWING:
+        return Envelope{10, 0, 0, 0};
+    case MuseAvatarState::BREWING_LATE:
+        return Envelope{16, 8, 0, 0}; // hop dy=-8
+    case MuseAvatarState::STEAMING:
+        return Envelope{20, 2, 0, 0};
+    case MuseAvatarState::DONE:
+        return Envelope{0, 12, 0, 0}; // celebration hop dy=-12
+    case MuseAvatarState::WARNING:
+        return Envelope{0, 0, 2, 0}; // shake dx=+/-2
+    default:
+        return Envelope{0, 0, 0, 0};
+    }
 }
 } // namespace
 #endif // GAGGIMATE_HEADLESS
@@ -446,7 +474,11 @@ void MuseAvatarPlugin::renderOverlay(uint32_t tick) {
         lv_img_set_pivot(img, pose->header.w / 2, pose->header.h / 2);
     }
     const uint32_t phase = tick / 120; // ~8.3 fps animation steps
-    int zoom = fitZoom(pose, boxW, boxH);
+    // Fit so the pose's AABB survives the state's worst animation phase,
+    // then apply this phase's transform (MuseSpriteFit.h). The SLEEP
+    // breathing rides on top of the fitted base; the fit already reserved
+    // that headroom in the envelope.
+    int zoom = MuseSpriteFit::fitZoom(pose->header.w, pose->header.h, boxW, boxH, animEnvelope(state));
     int angle = 0; // 0.1 degree units
     int dx = 0;
     int dy = 0;
@@ -484,7 +516,19 @@ void MuseAvatarPlugin::renderOverlay(uint32_t tick) {
     }
     lv_img_set_zoom(img, zoom);
     lv_img_set_angle(img, angle);
-    lv_obj_align(img, LV_ALIGN_BOTTOM_MID, dx, dy);
+    // Anchor the drawn sprite by its pivot (MuseSpriteFit.h): the pivot
+    // goes where the AABB's bottom edge is boxH + dy (feet planted, hops
+    // rise) and its centre is boxW/2 + dx. Aligning the object rect
+    // instead (LV_ALIGN_BOTTOM_MID) is what cropped the head in the
+    // compact layout — the rect is the untransformed source size.
+    {
+        const int px = pose->header.w / 2;
+        const int py = pose->header.h / 2;
+        int tx = 0;
+        int ty = 0;
+        MuseSpriteFit::pivotTarget(pose->header.w, pose->header.h, px, py, zoom, angle, boxW, boxH, dx, dy, tx, ty);
+        lv_obj_set_pos(img, tx - px, ty - py);
+    }
 
     // --- speech bubble ---
     char text[64] = "";
