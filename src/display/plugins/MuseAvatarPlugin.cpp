@@ -1,4 +1,5 @@
 #include "MuseAvatarPlugin.h"
+#include "MuseWarningPolicy.h"
 #include <cstring>
 #include <display/core/Controller.h>
 #include <display/core/WarningManager.h>
@@ -132,17 +133,42 @@ void MuseAvatarPlugin::setSnapshot(MuseAvatarState state, const String &warning)
 }
 
 MuseAvatarState MuseAvatarPlugin::computeState() {
-    // Warnings override everything (§4.1 priority).
+    // Warnings override everything (§4.1 priority) — but since muse-1.3
+    // only real faults count (MuseWarningPolicy): ERROR-level warnings,
+    // plus the hard faults that ship at WARN level (empty water tank,
+    // steam switch left on). WARN-level background notices — temperature
+    // not yet stable during heat-up, the flush/backflush/descaling
+    // maintenance reminders, scale link/battery chatter — no longer pin
+    // the worried pose over SLEEP/HEATING on real hardware.
     const WarningManager &wm = controller->getWarnings();
     if (controller->isErrorState()) {
         setSnapshot(MuseAvatarState::WARNING, controller->getSystemStateMessage());
         return MuseAvatarState::WARNING;
     }
-    if (wm.hasError() || wm.hasWarning()) {
-        String labels = wm.getLabels();
-        const int nl = labels.indexOf('\n');
-        setSnapshot(MuseAvatarState::WARNING, nl >= 0 ? labels.substring(0, nl) : labels);
-        return MuseAvatarState::WARNING;
+    {
+        bool active[WARNING_TYPE_COUNT];
+        int level[WARNING_TYPE_COUNT];
+        for (int i = 0; i < WARNING_TYPE_COUNT; i++) {
+            const auto type = static_cast<WarningType>(i);
+            active[i] = wm.isActive(type);
+            level[i] = wm.getLevel(type);
+        }
+        if (MuseWarningPolicy::anyTrigger(active, level, WARNING_TYPE_COUNT)) {
+            // The bubble lists only the triggering warnings' labels, not
+            // every active one (getLabels() would also name the WARN-level
+            // notices that did not trigger the pose).
+            String labels;
+            for (int i = 0; i < WARNING_TYPE_COUNT; i++) {
+                if (!MuseWarningPolicy::typeTriggers(active[i], level[i], i))
+                    continue;
+                if (labels.length() > 0)
+                    labels += "\n";
+                labels += WarningManager::label(static_cast<WarningType>(i));
+            }
+            const int nl = labels.indexOf('\n');
+            setSnapshot(MuseAvatarState::WARNING, nl >= 0 ? labels.substring(0, nl) : labels);
+            return MuseAvatarState::WARNING;
+        }
     }
 
     const int mode = controller->getMode();
