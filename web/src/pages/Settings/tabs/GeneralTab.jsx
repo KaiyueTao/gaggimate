@@ -431,11 +431,20 @@ export function GeneralTab({
               onChange={onChange('museEnabled')}
             />
           </div>
+          <div className='mb-4'>
+            <ToggleField
+              label={t`Muse Speech Bubbles`}
+              htmlFor='museBubbles'
+              checked={!!formData.museBubbles}
+              onChange={onChange('museBubbles')}
+            />
+          </div>
           <ToggleField
-            label={t`Muse Speech Bubbles`}
-            htmlFor='museBubbles'
-            checked={!!formData.museBubbles}
-            onChange={onChange('museBubbles')}
+            label={t`Muse Remote Lines`}
+            htmlFor='museRemoteLines'
+            helpText={t`Allow a paired Muse session to send lines to the display`}
+            checked={!!formData.museRemoteLines}
+            onChange={onChange('museRemoteLines')}
           />
         </div>
       </Section>

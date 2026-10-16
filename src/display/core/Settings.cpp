@@ -135,6 +135,8 @@ void Settings::setDelayAdjust(bool delay_adjust) { delayAdjust.set(delay_adjust)
 
 void Settings::setMuseEnabled(bool muse_enabled) { museEnabled.set(muse_enabled); }
 
+void Settings::setMuseRemoteLines(bool muse_remote_lines) { museRemoteLines.set(muse_remote_lines); }
+
 void Settings::setMuseBubbles(bool muse_bubbles) { museBubbles.set(muse_bubbles); }
 
 void Settings::setStartupMode(const int startup_mode) { startupMode.set(startup_mode); }

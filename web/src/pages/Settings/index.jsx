@@ -73,6 +73,7 @@ const CHECKBOX_KEYS = [
   'smartGrindToggle',
   'museEnabled',
   'museBubbles',
+  'museRemoteLines',
 ];
 
 // Device facts GET /api/settings reports for display only; never saved, exported or imported.

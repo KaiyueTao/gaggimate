@@ -35,6 +35,13 @@ class MuseAvatarPlugin : public Plugin {
     void updateState();
     MuseAvatarState computeState();
     void setSnapshot(MuseAvatarState state, const String &warningText);
+    // Phase 2 (§6.1): sample the snapshot inputs and publish them as the
+    // one locked snapshot behind GET /api/muse/state; also services the
+    // remote-line mailbox (active invalidation, §6.2).
+    void publishSnapshot(MuseAvatarState avatarState);
+    // Read-only brew activity probe for the snapshot (no bookkeeping side
+    // effects, unlike the DONE logic inside computeState()).
+    void readBrewActivity(bool &running, unsigned long &elapsedMs);
 
 #ifndef GAGGIMATE_HEADLESS
     // --- overlay view (UI task only: "ui:loop" event handler + lv_timer) ---
@@ -47,6 +54,7 @@ class MuseAvatarPlugin : public Plugin {
     Controller *controller = nullptr;
     bool initialized = false;      // controller:ready seen
     bool overlayRequested = false; // overlay creation posted to the UI task
+    uint32_t bootId = 0;           // NVS boot counter value for this boot (§6.1)
 
     unsigned long lastUpdate = 0;
     unsigned long lastLineChange = 0;

@@ -1,6 +1,8 @@
 #include "MuseAvatarPlugin.h"
+#include "MuseRemote.h"
 #include "MuseSpriteFit.h"
 #include "MuseWarningPolicy.h"
+#include <Preferences.h>
 #include <cstring>
 #include <display/core/Controller.h>
 #include <display/core/WarningManager.h>
@@ -157,6 +159,29 @@ MuseSpriteFit::Envelope animEnvelope(MuseAvatarState state) {
 void MuseAvatarPlugin::setup(Controller *controller, PluginManager *pluginManager) {
     this->controller = controller;
     pluginManager->on("controller:ready", [this](Event const) { initialized = true; });
+    // Phase 2 (§6.1): the boot identity for the state snapshot comes from a
+    // persistent NVS boot counter, incremented exactly once here at
+    // startup — monotonic across restarts, never a compiled-in default,
+    // never reused. The counter lives in its own NVS namespace so it can
+    // never collide with a user setting.
+    {
+        Preferences prefs;
+        prefs.begin("muse", false);
+        const uint32_t stored = prefs.getUInt("boot_ctr", 0);
+        bootId = MuseRemote::nextBootId(stored);
+        prefs.putUInt("boot_ctr", bootId);
+        prefs.end();
+    }
+    museStatePublisher.setBootId(bootId);
+    museLineMailbox.setBootId(bootId);
+    // Telemetry freshness (§6.1): the Controller fires this event from its
+    // sensor-data callback for every telemetry frame the controller board
+    // sends — that receipt is what data_age_ms is measured from, never an
+    // HTTP query or a render poll. The handler runs in the comms callback
+    // context, so it does exactly one atomic store.
+    pluginManager->on("pump:volume:change", [](Event const &) {
+        museStatePublisher.noteTelemetry(static_cast<uint32_t>(millis()));
+    });
 #ifndef GAGGIMATE_HEADLESS
     // DefaultUI triggers "ui:loop" on the UI task every pass; the handler is
     // where overlay creation happens, so no LVGL call ever leaves the UI
@@ -311,19 +336,66 @@ MuseAvatarState MuseAvatarPlugin::computeState() {
 
 void MuseAvatarPlugin::updateState() {
     const Settings &settings = controller->getSettings();
-    if (!settings.isMuseEnabled()) {
+    const bool enabled = settings.isMuseEnabled();
+    MuseAvatarState state = MuseAvatarState::HIDDEN;
+    if (!enabled) {
         snapState.store(static_cast<uint8_t>(MuseAvatarState::HIDDEN));
-        return;
+    } else {
+        snapBubbles.store(settings.isMuseBubbles());
+        state = computeState();
+        if (state != MuseAvatarState::WARNING) {
+            setSnapshot(state, "");
+        }
+        if (millis() - lastLineChange >= LINE_ROTATE_MS) {
+            lastLineChange = millis();
+            lineRotation.fetch_add(1);
+        }
     }
-    snapBubbles.store(settings.isMuseBubbles());
-    const MuseAvatarState state = computeState();
-    if (state != MuseAvatarState::WARNING) {
-        setSnapshot(state, "");
+    // Phase 2: the snapshot is published even with the avatar disabled —
+    // GET /api/muse/state reports the machine, and avatar_state simply
+    // reads HIDDEN then. Mailbox servicing runs on the same poll: a stored
+    // remote line is invalidated as soon as its context, the data
+    // freshness, or the WARNING presentation says it must go (§6.2).
+    publishSnapshot(state);
+    const uint32_t nowMs = static_cast<uint32_t>(millis());
+    const auto snap = museStatePublisher.getSnapshot(nowMs);
+    museLineMailbox.service(nowMs, MuseRemote::lineContextOf(snap), state, enabled && settings.isMuseRemoteLines());
+}
+
+void MuseAvatarPlugin::readBrewActivity(bool &running, unsigned long &elapsedMs) {
+    running = false;
+    elapsedMs = 0;
+    // Same discipline as computeState(): process derefs only under the
+    // process lock, primitive values only copied out (GM-147).
+    std::lock_guard<std::recursive_mutex> guard(controller->getProcessLock());
+    Process *current = controller->getProcess();
+    if (current != nullptr && current->getType() == MODE_BREW && current->isActive()) {
+        running = true;
+        elapsedMs = millis() - static_cast<BrewProcess *>(current)->processStarted;
     }
-    if (millis() - lastLineChange >= LINE_ROTATE_MS) {
-        lastLineChange = millis();
-        lineRotation.fetch_add(1);
+}
+
+void MuseAvatarPlugin::publishSnapshot(MuseAvatarState avatarState) {
+    MuseRemote::StateInputs in;
+    in.mode = controller->getMode();
+    in.boilerC = controller->getCurrentTemp();
+    in.targetC = controller->getTargetTemp();
+    bool brewRunning = false;
+    unsigned long brewElapsedMs = 0;
+    readBrewActivity(brewRunning, brewElapsedMs);
+    in.brewActive = brewRunning;
+    in.brewElapsedS = brewRunning ? static_cast<uint32_t>(brewElapsedMs / 1000) : 0;
+    in.avatarState = avatarState;
+    const WarningManager &wm = controller->getWarnings();
+    for (int i = 0; i < WARNING_TYPE_COUNT && i < MuseRemote::kMaxWarnings; i++) {
+        const auto type = static_cast<WarningType>(i);
+        in.warnActive[i] = wm.isActive(type);
+        in.warnLevel[i] = wm.getLevel(type);
+        in.warnId[i] = WarningManager::key(type);
+        in.warnText[i] = WarningManager::label(type);
     }
+    in.controllerConnected = controller->getClientController()->isConnected();
+    museStatePublisher.update(in, static_cast<uint32_t>(millis()));
 }
 
 #ifndef GAGGIMATE_HEADLESS
@@ -531,12 +603,29 @@ void MuseAvatarPlugin::renderOverlay(uint32_t tick) {
     }
 
     // --- speech bubble ---
+    // Text selection follows the §6.2 precedence via
+    // MuseRemote::decideBubbleSource (pinned by test_muse_remote):
+    // WARNING and DONE always speak locally; a valid stored remote line
+    // (Phase 2) outranks the local tables everywhere else, SLEEP included;
+    // the local tables are the fallback. A remote line is copied out of
+    // the mailbox under its lock into this UI-owned buffer first — the
+    // local sources' static-storage lifetime does not extend to it (§6.3).
     char text[64] = "";
     if (snapBubbles.load()) {
-        if (state == MuseAvatarState::WARNING) {
+        char remoteText[MuseRemote::kLineTextMax + 1] = "";
+        bool hasRemote = false;
+        {
+            const uint32_t nowMs = static_cast<uint32_t>(millis());
+            const auto snap = museStatePublisher.getSnapshot(nowMs);
+            hasRemote = museLineMailbox.copyValidLine(nowMs, MuseRemote::lineContextOf(snap), remoteText, sizeof(remoteText));
+        }
+        const MuseRemote::BubbleSource source = MuseRemote::decideBubbleSource(state, hasRemote);
+        if (source == MuseRemote::BubbleSource::LocalWarning) {
             std::lock_guard<std::mutex> guard(warningMutex);
             strncpy(text, warningText, sizeof(text) - 1);
-        } else if (state == MuseAvatarState::DONE) {
+        } else if (source == MuseRemote::BubbleSource::Remote) {
+            strncpy(text, remoteText, sizeof(text) - 1);
+        } else if (source == MuseRemote::BubbleSource::LocalDone) {
             snprintf(text, sizeof(text), "Done! %ds shot", snapShotSeconds.load());
             const int volume = snapShotVolume.load();
             if (volume > 0) {
@@ -563,7 +652,7 @@ void MuseAvatarPlugin::renderOverlay(uint32_t tick) {
                 snprintf(extra, sizeof(extra), ", %d%s", volume, unit);
                 strncat(text, extra, sizeof(text) - strlen(text) - 1);
             }
-        } else if (state != MuseAvatarState::SLEEP) {
+        } else if (source == MuseRemote::BubbleSource::LocalTable) {
             strncpy(text, museLocalLines.getLine(state, lineRotation.load()), sizeof(text) - 1);
         }
     }

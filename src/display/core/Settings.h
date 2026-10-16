@@ -99,6 +99,7 @@ class Settings {
     bool isDelayAdjust() const { return delayAdjust.get(); }
     bool isMuseEnabled() const { return museEnabled.get(); }
     bool isMuseBubbles() const { return museBubbles.get(); }
+    bool isMuseRemoteLines() const { return museRemoteLines.get(); }
     bool isHeaterCoordinationEnabled() const { return heaterCoordinationEnabled.get(); }
     int getHeaterHandoverMs() const { return heaterHandoverMs.get(); }
     String getPid() const { return pid.get(); }
@@ -215,6 +216,7 @@ class Settings {
     void setDelayAdjust(bool delay_adjust);
     void setMuseEnabled(bool muse_enabled);
     void setMuseBubbles(bool muse_bubbles);
+    void setMuseRemoteLines(bool muse_remote_lines);
     void setPid(const String &pid);
     void setHeaterCoordinationEnabled(bool enabled);
     void setHeaterHandoverMs(int handoverMs);
@@ -328,6 +330,7 @@ class Settings {
     Property<bool> delayAdjust{registry, "del_ad", true};
     Property<bool> museEnabled{registry, "muse_en", true}; // Muse avatar overlay (Phase 1)
     Property<bool> museBubbles{registry, "muse_bb", true}; // Muse speech bubbles
+    Property<bool> museRemoteLines{registry, "muse_rmt", true}; // Muse remote lines (Phase 2)
     Property<int> startupMode{registry, "sm", MODE_STANDBY};
     Property<bool> autowakeupEnabled{registry, "ab_en", false};
     Property<std::vector<AutoWakeupSchedule>> autowakeupSchedules{registry, "ab_schedules", {AutoWakeupSchedule("07:00")}};

@@ -8,6 +8,7 @@
 #include <display/core/ProfileManager.h>
 #include <display/models/profile.h>
 #include <display/plugins/BLEScalePlugin.h>
+#include <display/plugins/MuseRemote.h>
 #include <display/plugins/ShotHistoryPlugin.h>
 #include <display/webassets/web_ui_manifest.h>
 #include <esp32-hal-psram.h>
@@ -179,6 +180,14 @@ void WebUIPlugin::setupServer() {
         serializeJson(doc, *response);
         request->send(response);
     });
+    // Muse Phase 2 (PHASE2_DESIGN.md §6): the dedicated state snapshot and
+    // the remote-line downlink. No new listeners — both ride this server.
+    server.on("/api/muse/state", HTTP_GET, [this](AsyncWebServerRequest *request) { handleMuseState(request); });
+    server.on(
+        "/api/muse/line", HTTP_POST, [this](AsyncWebServerRequest *request) { handleMuseLine(request); }, nullptr,
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            handleMuseLineBody(request, data, len, index, total);
+        });
     server.on("/api/scales/list", [this](AsyncWebServerRequest *request) { handleBLEScaleList(request); });
     server.on("/api/scales/connect", [this](AsyncWebServerRequest *request) { handleBLEScaleConnect(request); });
     server.on("/api/scales/scan", [this](AsyncWebServerRequest *request) { handleBLEScaleScan(request); });
@@ -314,6 +323,135 @@ void WebUIPlugin::handleOTAStart(JsonDocument &request) {
 // Booleans are only touched when present, so a partial POST keeps the rest (GM-214).
 static bool parseBoolArg(const String &value) {
     return !(value.isEmpty() || value == "0" || value.equalsIgnoreCase("false") || value.equalsIgnoreCase("off"));
+}
+
+// ---------------------------------------------------------------------------
+// Muse Phase 2 endpoints (PHASE2_DESIGN.md §6). Both are thin shells over
+// the MuseRemote units: the snapshot is the one locked publication the
+// avatar plugin maintains, and every line rule lives in the mailbox. The
+// handlers validate and copy only — no LVGL, no render path (§6.3).
+// ---------------------------------------------------------------------------
+
+void WebUIPlugin::handleMuseState(AsyncWebServerRequest *request) const {
+    const auto snap = museStatePublisher.getSnapshot(static_cast<uint32_t>(millis()));
+    AsyncResponseStream *response = request->beginResponseStream("application/json");
+    JsonDocument doc(&psramAllocator);
+    doc["schema_version"] = snap.schemaVersion;
+    doc["device"] = "gaggimate";
+    doc["boot_id"] = snap.bootId;
+    doc["state_seq"] = snap.stateSeq;
+    doc["mode"] = MuseRemote::modeName(snap.mode);
+    doc["boiler_c"] = snap.boilerC;
+    doc["target_c"] = snap.targetC;
+    JsonObject brew = doc["brew"].to<JsonObject>();
+    brew["active"] = snap.brewActive;
+    brew["elapsed_s"] = snap.brewElapsedS;
+    doc["avatar_state"] = MuseRemote::avatarStateName(snap.avatarState);
+    doc["controller_connected"] = snap.controllerConnected;
+    doc["data_age_ms"] = snap.dataAgeMs;
+    doc["stale"] = snap.stale;
+    JsonArray warnings = doc["warnings"].to<JsonArray>();
+    for (int i = 0; i < snap.warningCount; i++) {
+        JsonObject entry = warnings.add<JsonObject>();
+        entry["id"] = snap.warnings[i].id;
+        entry["level"] = MuseRemote::warningLevelName(snap.warnings[i].level);
+        entry["text"] = snap.warnings[i].text;
+    }
+    serializeJson(doc, *response);
+    request->send(response);
+}
+
+void WebUIPlugin::handleMuseLineBody(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index,
+                                       size_t total) {
+    if (index == 0) {
+        museLineRequest = request;
+        museLineBody = "";
+        museLineOverflow = total > MuseRemote::kLineBodyMax;
+    }
+    if (request != museLineRequest || museLineOverflow) {
+        return;
+    }
+    if (museLineBody.length() + len > MuseRemote::kLineBodyMax) {
+        museLineOverflow = true;
+        museLineBody = "";
+        return;
+    }
+    museLineBody.concat(reinterpret_cast<const char *>(data), static_cast<unsigned int>(len));
+}
+
+void WebUIPlugin::handleMuseLine(AsyncWebServerRequest *request) {
+    auto respond = [request](int status, bool ok, const char *value) {
+        JsonDocument doc(&psramAllocator);
+        doc["ok"] = ok;
+        doc[ok ? "result" : "reason"] = value;
+        String out;
+        serializeJson(doc, out);
+        request->send(status, "application/json", out);
+    };
+
+    // Consume the accumulated body (one in-flight at a time, see header).
+    String body;
+    bool overflow = false;
+    if (museLineRequest == request) {
+        body = museLineBody;
+        overflow = museLineOverflow;
+    }
+    museLineRequest = nullptr;
+    museLineBody = "";
+    museLineOverflow = false;
+
+    const Settings &settings = controller->getSettings();
+    if (!settings.isMuseEnabled() || !settings.isMuseRemoteLines()) {
+        respond(403, false, "disabled");
+        return;
+    }
+    const uint32_t nowMs = static_cast<uint32_t>(millis());
+    if (!museLineMailbox.noteAttempt(nowMs)) {
+        respond(429, false, MuseRemote::verdictReason(MuseRemote::LineVerdict::RateLimited));
+        return;
+    }
+    if (overflow) {
+        respond(400, false, "body_too_large");
+        return;
+    }
+    JsonDocument doc;
+    if (body.length() == 0 || deserializeJson(doc, body) != DeserializationError::Ok) {
+        respond(400, false, "invalid_json");
+        return;
+    }
+    const char *requestId = doc["request_id"].as<const char *>();
+    if (requestId == nullptr || !MuseRemote::requestIdValid(requestId, strlen(requestId))) {
+        respond(400, false, "invalid_request");
+        return;
+    }
+    const char *senderId = doc["sender_id"].as<const char *>();
+    if (senderId == nullptr || strcmp(senderId, MuseRemote::kSenderId) != 0) {
+        respond(400, false, "unknown_sender");
+        return;
+    }
+    if (!doc["line_seq"].is<uint32_t>() || !doc["boot_id"].is<uint32_t>() || !doc["state_seq"].is<uint32_t>() ||
+        !doc["ttl_s"].is<int64_t>()) {
+        respond(400, false, "invalid_request");
+        return;
+    }
+    const char *text = doc["text"].as<const char *>();
+    if (text == nullptr || !MuseRemote::lineTextValid(text, strlen(text))) {
+        respond(400, false, "invalid_text");
+        return;
+    }
+
+    MuseRemote::LineSubmission sub;
+    strncpy(sub.requestId, requestId, sizeof(sub.requestId) - 1);
+    strncpy(sub.text, text, sizeof(sub.text) - 1);
+    sub.lineSeq = doc["line_seq"].as<uint32_t>();
+    sub.bootId = doc["boot_id"].as<uint32_t>();
+    sub.stateSeq = doc["state_seq"].as<uint32_t>();
+    sub.ttlS = MuseRemote::clampTtlS(doc["ttl_s"].as<int64_t>());
+
+    const auto snap = museStatePublisher.getSnapshot(nowMs);
+    const MuseRemote::LineVerdict verdict = museLineMailbox.accept(sub, MuseRemote::lineContextOf(snap), nowMs);
+    const bool ok = verdict == MuseRemote::LineVerdict::Accepted || verdict == MuseRemote::LineVerdict::Duplicate;
+    respond(MuseRemote::verdictHttpStatus(verdict), ok, MuseRemote::verdictReason(verdict));
 }
 
 void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) const {
@@ -497,6 +635,8 @@ void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) const {
                 settings->setMuseEnabled(parseBoolArg(request->arg("museEnabled")));
             if (request->hasArg("museBubbles"))
                 settings->setMuseBubbles(parseBoolArg(request->arg("museBubbles")));
+            if (request->hasArg("museRemoteLines"))
+                settings->setMuseRemoteLines(parseBoolArg(request->arg("museRemoteLines")));
             if (request->hasArg("autowakeupSchedules")) {
                 // Handle schedule format with days
                 String schedulesStr = request->arg("autowakeupSchedules");
@@ -622,6 +762,7 @@ void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) const {
     doc["statusDisplayMode"] = settings.getStatusDisplayMode();
     doc["museEnabled"] = settings.isMuseEnabled();
     doc["museBubbles"] = settings.isMuseBubbles();
+    doc["museRemoteLines"] = settings.isMuseRemoteLines();
     doc["sunriseIdle"] = settings.getSunriseIdle();
     doc["sunriseActive"] = settings.getSunriseActive();
     doc["sunriseFinished"] = settings.getSunriseFinished();

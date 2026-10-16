@@ -48,6 +48,11 @@ class WebUIPlugin : public Plugin {
     // (catch-all for any path not claimed by an explicit route). [GM-106]
     void serveWebAsset(AsyncWebServerRequest *request);
     void handleSettings(AsyncWebServerRequest *request) const;
+    // Muse Phase 2 endpoints (PHASE2_DESIGN.md §6): the state snapshot and
+    // the remote-line downlink, served from the shared MuseRemote units.
+    void handleMuseState(AsyncWebServerRequest *request) const;
+    void handleMuseLineBody(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
+    void handleMuseLine(AsyncWebServerRequest *request);
     void handleBLEScaleList(AsyncWebServerRequest *request);
     void handleBLEScaleScan(AsyncWebServerRequest *request);
     void handleBLEScaleConnect(AsyncWebServerRequest *request);
@@ -83,6 +88,13 @@ class WebUIPlugin : public Plugin {
     AsyncWebServerRequest *imageUploadRequest = nullptr;
     File imageUploadFile;
     String imageUploadError;
+
+    // Muse line POST body accumulation (same one-at-a-time discipline as
+    // the profile-image upload): chunks land here from the body handler and
+    // are consumed by the request handler once the body is complete.
+    AsyncWebServerRequest *museLineRequest = nullptr;
+    String museLineBody;
+    bool museLineOverflow = false;
 };
 
 #endif // WEBUIPLUGIN_H
