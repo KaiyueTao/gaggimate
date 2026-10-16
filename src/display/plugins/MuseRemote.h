@@ -394,8 +394,10 @@ class LineMailbox {
     }
 
     // Front-door rate limit (§6.3: at most one POST per second and 30 per
-    // minute). Every attempt is recorded, whatever its later fate — the
-    // limiter guards the endpoint, not just accepted lines. Returns false
+    // minute). Attempts the limiter admits are recorded even if the line
+    // later fails validation — the limiter guards the endpoint, not just
+    // accepted lines; attempts the limiter itself rejects are not recorded
+    // (a rejected attempt cannot extend its own lockout). Returns false
     // when this attempt exceeds the limit.
     bool noteAttempt(uint32_t nowMs) {
         std::lock_guard<std::mutex> guard(mutex);
